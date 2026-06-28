@@ -150,6 +150,7 @@ def librelane_synth(
     *,
     booth=False,
     abc_dff=False,
+    preserve_src=False,
     undriven=True,
     keep_hierarchy_min_cost: Optional[int],
     keep_hierarchy_instances: List[str],
@@ -225,9 +226,13 @@ def librelane_synth(
     librelane_opt(d, fast=True)
     librelane_opt(d, fast=True)
 
-    d.run_pass(
-        "abc", "-fast", *(["-dff"] if abc_dff else [])
-    )  # Run ABC with fast settings
+    if not preserve_src:
+        d.run_pass(
+            "abc", "-fast", *(["-dff"] if abc_dff else [])
+        )  # Run ABC with fast settings
+        # NB: this classic `abc` pass round-trips via BLIF and strips \src.
+        # The origins backend skips it so \src survives to the final abc_new
+        # std-cell mapping (at the cost of this fast pre-optimization).
     d.run_pass("opt", "-fast")  # MORE fast optimization
 
     # Checks and Stats
@@ -374,6 +379,7 @@ def synthesize(
         report_dir,
         booth=config["SYNTH_MUL_BOOTH"],
         abc_dff=config["SYNTH_ABC_DFF"],
+        preserve_src=config["SYNTH_ABC_BACKEND"] == "origins",
         undriven=config.get("SYNTH_TIE_UNDEFINED") is not None,
         keep_hierarchy_min_cost=config["SYNTH_KEEP_HIERARCHY_MIN_COST"],
         keep_hierarchy_instances=config["SYNTH_KEEP_HIERARCHY_INSTANCES"],
@@ -449,23 +455,48 @@ def synthesize(
     script_creator = ABCScriptCreator(config)
 
     def run_strategy(d):
-        abc_script = script_creator.generate_abc_script(
-            step_dir,
-            config["SYNTH_STRATEGY"],
-        )
-        ys.log(f"[INFO] Using generated ABC script '{abc_script}'…")
-        d.run_pass(
-            "abc",
-            "-script",
-            abc_script,
-            "-D",
-            f"{clock_period}",
-            "-constr",
-            sdc_path,
-            "-showtmp",
-            *lib_arguments,
-            *(["-dff"] if config["SYNTH_ABC_DFF"] else []),
-        )
+        if config["SYNTH_ABC_BACKEND"] == "origins":
+            # Experimental: std-cell technology mapping via abc_new, which
+            # preserves \src source-location provenance on mapped cells through
+            # ABC origin tracking (the XAIGER "y" extension). Combinational
+            # designs only for now.
+            ys.log("[INFO] Using abc_new std-cell backend (origin tracking)…")
+            # abc_new maps to liberty cells that ABC reads itself (via -liberty).
+            # Drop the unused std-cell blackbox modules first, otherwise
+            # abc_new's box_derive/prep_box misclassifies them as abc9 boxes and
+            # fails with "has no timing". (Combinational designs only for now:
+            # any std cells already instantiated, e.g. dfflibmap flops, are not
+            # purged and would still need box handling.)
+            d.run_pass("hierarchy", "-top", config["DESIGN_NAME"], "-purge_lib")
+            d.run_pass("scratchpad", "-set", "abc9.origins_max", "100")
+            d.run_pass(
+                "abc_new",
+                "-script",
+                "+&nf",
+                "-D",
+                f"{clock_period}",
+                "-constr",
+                sdc_path,
+                *lib_arguments,
+            )
+        else:
+            abc_script = script_creator.generate_abc_script(
+                step_dir,
+                config["SYNTH_STRATEGY"],
+            )
+            ys.log(f"[INFO] Using generated ABC script '{abc_script}'…")
+            d.run_pass(
+                "abc",
+                "-script",
+                abc_script,
+                "-D",
+                f"{clock_period}",
+                "-constr",
+                sdc_path,
+                "-showtmp",
+                *lib_arguments,
+                *(["-dff"] if config["SYNTH_ABC_DFF"] else []),
+            )
 
         if value := config.get("SYNTH_TIE_UNDEFINED"):
             flag = "-zero" if value == "low" else "-one"

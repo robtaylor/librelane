@@ -440,6 +440,12 @@ class SynthesisCommon(VerilogStep):
             default="AREA 0",
         ),
         Variable(
+            "SYNTH_ABC_BACKEND",
+            Literal["classic", "origins"],
+            "Selects the ABC technology-mapping backend. 'classic' uses the standard `abc` pass. 'origins' uses the experimental `abc_new` std-cell mapper, which preserves `\\src` source-location attributes on mapped cells via ABC origin tracking. Experimental; combinational designs only for now.",
+            default="classic",
+        ),
+        Variable(
             "SYNTH_ABC_BUFFERING",
             bool,
             "Enables `abc` cell buffering.",
