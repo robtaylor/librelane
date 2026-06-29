@@ -458,21 +458,28 @@ def synthesize(
         if config["SYNTH_ABC_BACKEND"] == "origins":
             # Experimental: std-cell technology mapping via abc_new, which
             # preserves \src source-location provenance on mapped cells through
-            # ABC origin tracking (the XAIGER "y" extension). Combinational
-            # designs only for now.
+            # ABC origin tracking (the XAIGER "y" extension). Works for
+            # combinational, sequential, and memory designs.
             ys.log("[INFO] Using abc_new std-cell backend (origin tracking)…")
             # abc_new maps to liberty cells that ABC reads itself (via -liberty).
             # Drop the unused std-cell blackbox modules first, otherwise
             # abc_new's box_derive/prep_box misclassifies them as abc9 boxes and
-            # fails with "has no timing". (Combinational designs only for now:
-            # any std cells already instantiated, e.g. dfflibmap flops, are not
-            # purged and would still need box handling.)
+            # fails with "has no timing". (Flops survive -purge_lib as *used*
+            # cells and are handled as retained opaque boxes.)
             d.run_pass("hierarchy", "-top", config["DESIGN_NAME"], "-purge_lib")
             d.run_pass("scratchpad", "-set", "abc9.origins_max", "100")
+            # `&dch -f; &nf`: origin-preserving choice-based pre-optimization
+            # (&dch) before the std-cell mapper (&nf) recovers ~9-15% area vs a
+            # bare `&nf` while keeping 100% \src coverage and the timing edge.
+            # All engines used preserve vOrigins (unlike e.g. &syn2, which drops
+            # them). This replaces the dropped `abc -fast` pre-opt.
+            # NOTE: the inline `+` script must use ',' for spaces — abc9_exe's
+            # parser maps ',' -> ' '; a literal space would be mis-split when
+            # abc_new re-invokes abc9_exe as a command string.
             d.run_pass(
                 "abc_new",
                 "-script",
-                "+&nf",
+                "+&dch,-f;&nf",
                 "-D",
                 f"{clock_period}",
                 "-constr",
